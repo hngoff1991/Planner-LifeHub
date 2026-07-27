@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import TaskCard from './components/TaskCard';
-import { Plus, BookOpen, Calendar, Sparkles, Loader2, CloudOff, RefreshCw } from 'lucide-react';
+import { Plus, BookOpen, Calendar, Sparkles, Loader2, CloudOff, RefreshCw, FileText, X } from 'lucide-react';
 import { createClient } from '@supabase/supabase-js';
 
-// 🔑 COLOQUE SUAS CREDENCIAIS DO SUPABASE AQUI:
 const SUPABASE_URL = 'https://ubdmdmigxlrelvvpreei.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_BVz4xLvnUOJuoMH5OO4bBQ_U_Js0eZl';
 
@@ -22,9 +21,11 @@ export default function App() {
 
   const [tasks, setTasks] = useState([]);
   const [selectedFilterDate, setSelectedFilterDate] = useState('ALL');
+  const [customDateFilter, setCustomDateFilter] = useState(todayStr);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [syncError, setSyncError] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
 
   // 1. CARREGAR DADOS DO SUPABASE
   const fetchTasksFromCloud = useCallback(async (isManual = false) => {
@@ -39,7 +40,6 @@ export default function App() {
 
       if (error) throw error;
 
-      // Mapeia os dados do banco para o formato que o componente espera
       const formattedTasks = (data || []).map((t) => ({
         id: t.id,
         title: t.title,
@@ -66,7 +66,6 @@ export default function App() {
   useEffect(() => {
     fetchTasksFromCloud();
 
-    // Opcional: Tempo real ativado! Se mexer no celular, atualiza no PC na hora.
     const channel = supabase
       .channel('public:tasks')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, () => {
@@ -81,9 +80,7 @@ export default function App() {
 
   // CRUD COM SUPABASE
   const handleAddTask = useCallback(async (newTask) => {
-    // Atualiza otimisticamente a tela
     setTasks((prev) => [newTask, ...prev]);
-    setSelectedFilterDate('ALL');
 
     try {
       const { error } = await supabase.from('tasks').insert([
@@ -109,7 +106,6 @@ export default function App() {
       prev.map((t) => (t.id === id ? { ...t, ...updatedFields } : t))
     );
 
-    // Mapeia para os nomes das colunas do banco SQL
     const dbFields = {};
     if (updatedFields.title !== undefined) dbFields.title = updatedFields.title;
     if (updatedFields.category !== undefined) dbFields.category = updatedFields.category;
@@ -139,19 +135,42 @@ export default function App() {
     }
   }, []);
 
-  // Filtros
+  // Filtros Avançados
   const filteredTasks = useMemo(() => {
-    return (
-      selectedFilterDate === 'ALL'
-        ? tasks
-        : tasks.filter((t) => t.dueDate === selectedFilterDate)
-    ).sort((a, b) => (a.dueTime || '23:59').localeCompare(b.dueTime || '23:59'));
-  }, [tasks, selectedFilterDate]);
+    let result = tasks;
+    if (selectedFilterDate === 'TODAY') {
+      result = tasks.filter((t) => t.dueDate === todayStr);
+    } else if (selectedFilterDate === 'CUSTOM') {
+      result = tasks.filter((t) => t.dueDate === customDateFilter);
+    }
+    return result.sort((a, b) => (a.dueTime || '23:59').localeCompare(b.dueTime || '23:59'));
+  }, [tasks, selectedFilterDate, customDateFilter, todayStr]);
 
   const totalHours = useMemo(() => {
     const totalSeconds = filteredTasks.reduce((acc, t) => acc + (t.timeSpent || 0), 0);
     return (totalSeconds / 3600).toFixed(1);
   }, [filteredTasks]);
+
+  // Gerador de Relatório em Texto
+  const reportText = useMemo(() => {
+    const periodLabel = 
+      selectedFilterDate === 'TODAY' ? `Hoje (${todayStr})` :
+      selectedFilterDate === 'CUSTOM' ? `Data específica (${customDateFilter})` : 'Todas as Datas';
+
+    let text = `=== RELATÓRIO LIFEHUB PLANNER ===\n`;
+    text += `Período: ${periodLabel}\n`;
+    text += `Total de Horas Focadas: ${totalHours}h\n`;
+    text += `Total de Tarefas: ${filteredTasks.length}\n\n`;
+    text += `--- LISTA DE TAREFAS ---\n`;
+    
+    filteredTasks.forEach((t, index) => {
+      const status = t.completed ? '[CONCLUÍDA]' : '[PENDENTE]';
+      const horas = (t.timeSpent / 3600).toFixed(1);
+      text += `${index + 1}. ${t.title} (${t.category}) - Data: ${t.dueDate} às ${t.dueTime || '00:00'} - Status: ${status} - Foco: ${horas}h\n`;
+    });
+
+    return text;
+  }, [filteredTasks, selectedFilterDate, customDateFilter, todayStr, totalHours]);
 
   return (
     <div style={styles.pageBackground}>
@@ -176,7 +195,15 @@ export default function App() {
             </p>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '15px', flexWrap: 'wrap' }}>
+            <button 
+              onClick={() => setShowReportModal(true)} 
+              title="Gerar Relatório"
+              style={styles.actionBtn}
+            >
+              <FileText size={16} /> Relatório
+            </button>
+
             <button 
               onClick={() => fetchTasksFromCloud(true)} 
               disabled={refreshing} 
@@ -194,7 +221,7 @@ export default function App() {
               <div style={styles.statDivider} />
               <div style={styles.statBox}>
                 <span style={styles.statLabel}>Tarefas</span>
-                <div style={{ ...styles.statValue, color: '#4ade80' }}>{tasks.length}</div>
+                <div style={{ ...styles.statValue, color: '#4ade80' }}>{filteredTasks.length}</div>
               </div>
             </div>
           </div>
@@ -203,18 +230,18 @@ export default function App() {
         {/* FORMULARIO */}
         <TaskForm onAddTask={handleAddTask} todayStr={todayStr} loading={loading} />
 
-        {/* LISTA DE COMPROMISSOS */}
+        {/* LISTA DE COMPROMISSOS COM FILTROS */}
         <div style={styles.card}>
           <div style={styles.filterHeader}>
             <div style={styles.filterTitle}>
               <Calendar size={18} color="#3b82f6" />
-              <span>Compromissos Agendados ({tasks.length} totais)</span>
+              <span>Compromissos Agendados</span>
             </div>
 
-            <div style={{ display: 'flex', gap: '8px' }}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
               <button
-                onClick={() => setSelectedFilterDate(todayStr)}
-                style={styles.filterButton(selectedFilterDate === todayStr)}
+                onClick={() => setSelectedFilterDate('TODAY')}
+                style={styles.filterButton(selectedFilterDate === 'TODAY')}
               >
                 Hoje
               </button>
@@ -224,6 +251,17 @@ export default function App() {
               >
                 Todas
               </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <input
+                  type="date"
+                  value={customDateFilter}
+                  onChange={(e) => {
+                    setCustomDateFilter(e.target.value);
+                    setSelectedFilterDate('CUSTOM');
+                  }}
+                  style={styles.dateInputFilter}
+                />
+              </div>
             </div>
           </div>
 
@@ -237,10 +275,10 @@ export default function App() {
               <div style={styles.emptyState}>
                 <BookOpen size={40} color="#cbd5e1" style={{ marginBottom: '8px' }} />
                 <p style={{ margin: 0, fontWeight: 'bold', fontSize: '14px' }}>
-                  Nenhum compromisso encontrado.
+                  Nenhum compromisso encontrado para este filtro.
                 </p>
                 <p style={{ margin: '4px 0 0 0', fontSize: '12px' }}>
-                  Adicione uma nova tarefa acima para começar!
+                  Adicione uma nova tarefa ou altere a data selecionada!
                 </p>
               </div>
             ) : (
@@ -255,6 +293,41 @@ export default function App() {
             )}
           </div>
         </div>
+
+        {/* MODAL DE RELATÓRIO */}
+        {showReportModal && (
+          <div style={styles.modalOverlay}>
+            <div style={styles.modalContent}>
+              <div style={styles.modalHeader}>
+                <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '8px', color: '#1e293b' }}>
+                  <FileText size={20} color="#2563eb" /> Relatório de Atividades
+                </h3>
+                <button onClick={() => setShowReportModal(false)} style={styles.closeModalBtn}>
+                  <X size={18} />
+                </button>
+              </div>
+              <p style={{ fontSize: '12px', color: '#64748b', margin: '0 0 12px 0' }}>
+                Resumo baseado no filtro atual selecionado na tela.
+              </p>
+              <textarea
+                readOnly
+                value={reportText}
+                style={styles.reportTextArea}
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '12px' }}>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(reportText);
+                    alert('Relatório copiado para a área de transferência!');
+                  }}
+                  style={styles.btnPrimary}
+                >
+                  Copiar Relatório
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -295,6 +368,8 @@ function TaskForm({ onAddTask, todayStr, loading }) {
       <form onSubmit={handleSubmit} style={styles.formRow}>
         <input
           type="text"
+          name="taskTitle"
+          id="taskTitle"
           placeholder="O que vamos realizar?"
           value={newTaskTitle}
           onChange={(e) => setNewTaskTitle(e.target.value)}
@@ -303,6 +378,8 @@ function TaskForm({ onAddTask, todayStr, loading }) {
         />
         <input
           type="date"
+          name="dueDate"
+          id="dueDate"
           value={dueDate}
           onChange={(e) => setDueDate(e.target.value)}
           disabled={loading}
@@ -310,12 +387,16 @@ function TaskForm({ onAddTask, todayStr, loading }) {
         />
         <input
           type="time"
+          name="dueTime"
+          id="dueTime"
           value={dueTime}
           onChange={(e) => setDueTime(e.target.value)}
           disabled={loading}
           style={{ ...styles.inputControl, fontFamily: 'monospace' }}
         />
         <select
+          name="category"
+          id="category"
           value={category}
           onChange={(e) => setCategory(e.target.value)}
           disabled={loading}
@@ -386,6 +467,19 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
   },
+  actionBtn: {
+    backgroundColor: '#2563eb',
+    border: 'none',
+    color: '#fff',
+    padding: '10px 14px',
+    borderRadius: '12px',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '13px',
+    fontWeight: 'bold',
+  },
   badge: {
     display: 'inline-flex',
     alignItems: 'center',
@@ -446,6 +540,13 @@ const styles = {
     fontSize: '13px',
     backgroundColor: '#f8fafc',
   },
+  dateInputFilter: {
+    padding: '6px 10px',
+    borderRadius: '8px',
+    border: '1px solid #cbd5e1',
+    fontSize: '12px',
+    backgroundColor: '#f8fafc',
+  },
   btnPrimary: {
     backgroundColor: '#2563eb',
     color: '#fff',
@@ -457,6 +558,7 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     gap: '6px',
+    fontSize: '13px',
   },
   filterHeader: {
     display: 'flex',
@@ -465,6 +567,8 @@ const styles = {
     marginBottom: '16px',
     paddingBottom: '12px',
     borderBottom: '1px solid #f1f5f9',
+    flexWrap: 'wrap',
+    gap: '10px',
   },
   filterTitle: {
     display: 'flex',
@@ -492,5 +596,50 @@ const styles = {
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  modalOverlay: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    width: '100vw',
+    height: '100vh',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1000,
+    padding: '15px',
+  },
+  modalContent: {
+    backgroundColor: '#ffffff',
+    borderRadius: '16px',
+    padding: '24px',
+    width: '100%',
+    maxWidth: '600px',
+    boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+  },
+  modalHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '4px',
+  },
+  closeModalBtn: {
+    background: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    color: '#64748b',
+  },
+  reportTextArea: {
+    width: '100%',
+    height: '250px',
+    padding: '12px',
+    borderRadius: '10px',
+    border: '1px solid #cbd5e1',
+    fontFamily: 'monospace',
+    fontSize: '12px',
+    backgroundColor: '#f8fafc',
+    resize: 'none',
+    outline: 'none',
   },
 };
